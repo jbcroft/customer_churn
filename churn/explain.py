@@ -105,7 +105,7 @@ def shap_direction(shap_res: ShapResult) -> dict[str, str]:
 
 
 def compute_permutation_importance(
-    gbm: ModelResult, X_test: pd.DataFrame, y_test: np.ndarray, n_repeats: int = 10
+    gbm: ModelResult, X_test: pd.DataFrame, y_test: np.ndarray, n_repeats: int = 5
 ) -> pd.Series:
     """Permutation importance on the GBM (model-agnostic), keyed by encoded name."""
     # permute on the encoded matrix so importances align with encoded names
@@ -114,7 +114,7 @@ def compute_permutation_importance(
     try:
         r = permutation_importance(
             clf, Z, y_test, n_repeats=n_repeats,
-            random_state=RANDOM_STATE, scoring="average_precision", n_jobs=1,
+            random_state=RANDOM_STATE, scoring="average_precision", n_jobs=-1,
         )
         return pd.Series(r.importances_mean, index=gbm.encoded_names)
     except Exception:  # noqa: BLE001

@@ -80,7 +80,12 @@ def gbm_estimator(scale_pos_weight: float | None, balanced: bool):
         HistGradientBoostingClassifier(
             max_depth=4,
             learning_rate=0.05,
-            max_iter=300,
+            max_iter=400,
+            # early stopping converges in far fewer than max_iter iterations and
+            # keeps a validation slice *inside* the training fold (no leakage).
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=15,
             class_weight="balanced" if balanced else None,
             random_state=RANDOM_STATE,
         ),
@@ -236,33 +241,33 @@ def _odds_ratios_statsmodels(Z: pd.DataFrame, y: np.ndarray) -> pd.DataFrame | N
 
 
 def _odds_ratios_bootstrap(
-    spec: FeatureSpec, X: pd.DataFrame, y: np.ndarray, n_boot: int = 150
+    Z: pd.DataFrame, names: list[str], y: np.ndarray, n_boot: int = 120
 ) -> pd.DataFrame:
-    """Bootstrap 95% CIs for odds ratios from the sklearn LR (robust fallback)."""
+    """Bootstrap 95% CIs for odds ratios on a PRE-TRANSFORMED design matrix.
+
+    Preprocessing (recency/impute/encode/scale) is fit once on the training data
+    upstream; here we only resample rows of the encoded matrix and refit a plain
+    LogisticRegression. That is ~100x cheaper than rebuilding the full pipeline
+    per bootstrap iteration, and the coefficient uncertainty is what the CI is
+    about anyway.
+    """
+    Zv = np.asarray(Z, dtype=float)
     rng = np.random.default_rng(RANDOM_STATE)
-    n = len(X)
+    n = len(Zv)
     coefs = []
-    base_names: list[str] | None = None
     for _ in range(n_boot):
         idx = rng.integers(0, n, n)
-        pipe = build_preprocessor(spec, scale=True)
         clf = LogisticRegression(max_iter=1000, class_weight="balanced")
-        from sklearn.pipeline import Pipeline as SkPipe
-
-        full = SkPipe([("prep", pipe), ("clf", clf)])
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                full.fit(X.iloc[idx], y[idx])
+                clf.fit(Zv[idx], y[idx])
         except Exception:  # noqa: BLE001
             continue
-        names = list(full.named_steps["prep"].get_feature_names_out())
-        if base_names is None:
-            base_names = names
-        if names == base_names:
-            coefs.append(full.named_steps["clf"].coef_[0])
-    if not coefs or base_names is None:
+        coefs.append(clf.coef_[0])
+    if not coefs:
         return pd.DataFrame()
+    base_names = list(names)
     arr = np.vstack(coefs)
     lo = np.percentile(arr, 2.5, axis=0)
     hi = np.percentile(arr, 97.5, axis=0)
@@ -288,6 +293,7 @@ def compute_odds_ratios(
     prep = fitted_pipe.named_steps["prep"]
     Z = prep.transform(recency.transform(X_train))
     Z = pd.DataFrame(Z).reset_index(drop=True)
+    names = list(prep.get_feature_names_out())
     sm_table = _odds_ratios_statsmodels(Z, np.asarray(y_train))
     # statsmodels can "converge" yet return NaN standard errors (singular Hessian
     # under quasi-separation). In that case the CIs/p-values are useless -> bootstrap.
@@ -296,7 +302,7 @@ def compute_odds_ratios(
         and sm_table["p_value"].notna().any()
         and sm_table["ci_low"].notna().any()
     )
-    table = sm_table if sm_ok else _odds_ratios_bootstrap(spec, X_train, np.asarray(y_train))
+    table = sm_table if sm_ok else _odds_ratios_bootstrap(Z, names, np.asarray(y_train))
     if table.empty:
         return table
     table["direction"] = np.where(table["odds_ratio"] > 1, "↑ churn", "↓ churn")
@@ -370,13 +376,21 @@ def fit_model(
     threshold: float = 0.5,
     n_splits: int = 5,
     compute_or: bool = True,
+    progress=None,
 ) -> ModelResult:
+    def _say(msg: str) -> None:
+        if progress is not None:
+            progress(msg)
+
     y_tr = np.asarray(y_train).astype(int)
     y_te = np.asarray(y_test).astype(int)
+    label = "Logistic Regression" if kind == "lr" else "gradient boosting"
 
     pipeline = _build_full_pipeline(spec, kind, imbalance, base_rate)
+    _say(f"Cross-validating {label} ({n_splits}-fold)…")
     cv = _run_cv(pipeline, X_train, y_tr, n_splits)
 
+    _say(f"Fitting {label} on the full training set…")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         pipeline.fit(X_train, y_tr)
@@ -398,6 +412,7 @@ def fit_model(
 
     odds = None
     if kind == "lr" and compute_or:
+        _say("Computing odds ratios with bootstrap confidence intervals…")
         odds = compute_odds_ratios(spec, pipeline, X_train, y_tr)
 
     name = "Logistic Regression" if kind == "lr" else gbm_estimator(None, False)[1]
@@ -421,6 +436,7 @@ def train_all(
     n_splits: int = 5,
     fit_lr: bool = True,
     fit_gbm: bool = True,
+    progress=None,
 ) -> ModelingOutput:
     """Stratified split, then fit LR and GBM with shared train/test folds."""
     y = pd.Series(y).astype(int).reset_index(drop=True)
@@ -436,10 +452,10 @@ def train_all(
     if fit_lr:
         out.lr = fit_model(spec, X_train, y_train, X_test, y_test,
                            kind="lr", imbalance=imbalance, base_rate=base,
-                           threshold=threshold, n_splits=n_splits)
+                           threshold=threshold, n_splits=n_splits, progress=progress)
     if fit_gbm:
         out.gbm = fit_model(spec, X_train, y_train, X_test, y_test,
                             kind="gbm", imbalance=imbalance, base_rate=base,
-                            threshold=threshold, n_splits=n_splits)
+                            threshold=threshold, n_splits=n_splits, progress=progress)
         out.gbm_name = out.gbm.name
     return out

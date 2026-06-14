@@ -87,16 +87,31 @@ def sidebar(state: AppState) -> Stage:
 
 
 def _run_everything(state: AppState):
+    import time
+
     cfg = _current_analysis_config(state)
-    bar = st.sidebar.progress(0.0, text="Starting…")
+    start = time.time()
+    with st.sidebar:
+        status = st.status("Running full analysis…", expanded=True)
+    bar = status.progress(0.0)
+    done: list[str] = []
+
+    def cb(frac: float, msg: str) -> None:
+        # mark the previous step done, show the current one in-progress
+        if done:
+            status.write(f"✓ {done[-1]}")
+        done.append(msg)
+        elapsed = time.time() - start
+        bar.progress(min(max(frac, 0.0), 1.0), text=f"{msg}  ·  {elapsed:0.0f}s")
+
     try:
-        run_full_analysis(state.raw_df, state.roles_or_overrides(), cfg, state=state,
-                          progress=lambda f, m: bar.progress(f, text=m))
-        st.sidebar.success("Analysis complete — explore the stages.")
+        run_full_analysis(state.raw_df, state.roles_or_overrides(), cfg, state=state, progress=cb)
+        if done:
+            status.write(f"✓ {done[-1]}")
+        status.update(label=f"✅ Analysis complete in {time.time() - start:0.0f}s — explore the stages.",
+                      state="complete", expanded=False)
     except Exception as exc:  # noqa: BLE001
-        st.sidebar.error(f"Analysis failed: {exc}")
-    finally:
-        bar.empty()
+        status.update(label=f"❌ Analysis failed: {exc}", state="error", expanded=True)
 
 
 def _current_analysis_config(state: AppState) -> AnalysisConfig:

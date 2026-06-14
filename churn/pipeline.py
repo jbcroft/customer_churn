@@ -53,7 +53,7 @@ def run_full_analysis(
     state.positive_class = config.positive_class
 
     # --- clean ---
-    _tick(0.10, "Cleaning data…")
+    _tick(0.04, "Cleaning data (dedupe, drops, type coercion)…")
     clean_df, clean_report, feature_cols = cleaning.clean_dataframe(
         raw_df, roles, config.cleaning, target_col=config.target_col, log=state.log,
     )
@@ -64,7 +64,7 @@ def run_full_analysis(
     state.base_rate = profiling.base_rate(y)
 
     # --- transform spec + VIF ---
-    _tick(0.25, "Building features…")
+    _tick(0.12, "Building feature pipeline + checking collinearity (VIF)…")
     spec = features.build_feature_spec(roles, feature_cols, config.cleaning)
     state.feature_spec = spec
     ndm = features.numeric_design_matrix(clean_df, spec)
@@ -74,15 +74,22 @@ def run_full_analysis(
                   f"{len(spec.datetime_cols)} datetime->recency")
 
     # --- univariate stats ---
-    _tick(0.35, "Univariate statistics…")
+    _tick(0.18, "Univariate statistics (tests + effect sizes + FDR)…")
     stats_table = stats_drivers.run_univariate(clean_df, y, roles, feature_cols)
 
-    # --- model ---
-    _tick(0.50, "Training models (CV + fit)…")
+    # --- model (the long pole) — sub-steps stream through the progress band ---
+    _model_msgs = {"n": 0}
+    _MODEL_TOTAL = 5  # LR cv, LR fit, odds-ratios, GBM cv, GBM fit
+
+    def _model_progress(msg: str) -> None:
+        _model_msgs["n"] += 1
+        frac = 0.22 + 0.56 * (_model_msgs["n"] / _MODEL_TOTAL)
+        _tick(min(frac, 0.78), msg)
+
     X = clean_df[spec.all_input_cols]
     model_out = modeling.train_all(
         spec, X, y, imbalance=config.imbalance, test_size=config.test_size,
-        threshold=config.threshold, n_splits=config.n_splits,
+        threshold=config.threshold, n_splits=config.n_splits, progress=_model_progress,
     )
     state.model_result = model_out
     state.threshold = config.threshold
@@ -90,9 +97,13 @@ def run_full_analysis(
                   f"imbalance={config.imbalance}, {config.n_splits}-fold CV, test={config.test_size:.0%}")
 
     # --- drivers (SHAP + permutation + OR) ---
-    _tick(0.70, "Explaining drivers (SHAP + permutation)…")
-    shap_res = explain.compute_shap(model_out.gbm, model_out.X_test) if config.compute_shap else None
+    shap_res = None
+    if config.compute_shap:
+        _tick(0.80, "Computing SHAP values (per-feature attribution)…")
+        shap_res = explain.compute_shap(model_out.gbm, model_out.X_test)
+    _tick(0.86, "Computing permutation importance…")
     perm = explain.compute_permutation_importance(model_out.gbm, model_out.X_test, model_out.y_test)
+    _tick(0.90, "Assembling the unified driver table…")
     gran, parent = explain.build_driver_table(
         model_out.lr, model_out.gbm, model_out.X_test, model_out.y_test,
         shap_res=shap_res, perm=perm,
@@ -101,7 +112,7 @@ def run_full_analysis(
     state.driver_table = {"granular": gran, "parent": parent, "stats": stats_table, "shap": shap_res}
 
     # --- figures ---
-    _tick(0.88, "Rendering figures…")
+    _tick(0.94, "Rendering figures…")
     state.figures = _build_figures(state, clean_df, y, spec, model_out, gran, parent, shap_res, ndm)
     _tick(1.0, "Done.")
     return state
