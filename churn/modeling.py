@@ -285,16 +285,40 @@ def _odds_ratios_bootstrap(
     })
 
 
+# Bounds that keep odds-ratio estimation fast regardless of dataset size.
+# statsmodels.Logit cost scales with rows * features * iterations and becomes the
+# bottleneck on real-world data, so we cap rows and only attempt it on narrow
+# designs; everything else uses the fast bootstrap on the pre-transformed matrix.
+OR_MAX_ROWS = 12000
+OR_STATSMODELS_MAX_FEATURES = 40
+
+
 def compute_odds_ratios(
     spec: FeatureSpec, fitted_pipe, X_train: pd.DataFrame, y_train: np.ndarray
 ) -> pd.DataFrame:
-    """Odds-ratio table with direction. Tries statsmodels, falls back to bootstrap."""
+    """Odds-ratio table with direction. Bounded so it never stalls on big data.
+
+    Tries statsmodels only for narrow designs on a capped row sample (for exact
+    p-values/CIs); otherwise — and whenever statsmodels returns degenerate
+    standard errors — uses the fast bootstrap on the pre-transformed matrix.
+    """
     recency = fitted_pipe.named_steps["recency"]
     prep = fitted_pipe.named_steps["prep"]
     Z = prep.transform(recency.transform(X_train))
     Z = pd.DataFrame(Z).reset_index(drop=True)
     names = list(prep.get_feature_names_out())
-    sm_table = _odds_ratios_statsmodels(Z, np.asarray(y_train))
+    y = np.asarray(y_train).astype(int)
+
+    # cap rows so neither statsmodels nor the bootstrap blows up on large uploads
+    if len(Z) > OR_MAX_ROWS:
+        rng = np.random.default_rng(RANDOM_STATE)
+        idx = rng.choice(len(Z), OR_MAX_ROWS, replace=False)
+        Z = Z.iloc[idx].reset_index(drop=True)
+        y = y[idx]
+
+    sm_table = None
+    if Z.shape[1] <= OR_STATSMODELS_MAX_FEATURES:
+        sm_table = _odds_ratios_statsmodels(Z, y)
     # statsmodels can "converge" yet return NaN standard errors (singular Hessian
     # under quasi-separation). In that case the CIs/p-values are useless -> bootstrap.
     sm_ok = (
@@ -302,7 +326,7 @@ def compute_odds_ratios(
         and sm_table["p_value"].notna().any()
         and sm_table["ci_low"].notna().any()
     )
-    table = sm_table if sm_ok else _odds_ratios_bootstrap(Z, names, np.asarray(y_train))
+    table = sm_table if sm_ok else _odds_ratios_bootstrap(Z, names, y)
     if table.empty:
         return table
     table["direction"] = np.where(table["odds_ratio"] > 1, "↑ churn", "↓ churn")
@@ -353,7 +377,8 @@ def _run_cv(pipeline, X, y, n_splits: int) -> dict[str, tuple[float, float]]:
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_STATE)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        scores = cross_validate(pipeline, X, y, cv=skf, scoring=_CV_SCORING, n_jobs=1)
+        # parallelize across folds — ~6x faster on large data, the dominant cost
+        scores = cross_validate(pipeline, X, y, cv=skf, scoring=_CV_SCORING, n_jobs=-1)
     out: dict[str, tuple[float, float]] = {}
     for name in _CV_SCORING:
         vals = scores[f"test_{name}"]

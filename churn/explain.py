@@ -104,16 +104,24 @@ def shap_direction(shap_res: ShapResult) -> dict[str, str]:
     return out
 
 
+PERM_MAX_SAMPLES = 5000  # cap rows so permutation importance stays fast on big data
+
+
 def compute_permutation_importance(
     gbm: ModelResult, X_test: pd.DataFrame, y_test: np.ndarray, n_repeats: int = 5
 ) -> pd.Series:
     """Permutation importance on the GBM (model-agnostic), keyed by encoded name."""
     # permute on the encoded matrix so importances align with encoded names
     Z = _transform_for_explain(gbm, X_test)
+    y = np.asarray(y_test)
+    if len(Z) > PERM_MAX_SAMPLES:
+        rng = np.random.default_rng(RANDOM_STATE)
+        idx = rng.choice(len(Z), PERM_MAX_SAMPLES, replace=False)
+        Z, y = Z.iloc[idx].reset_index(drop=True), y[idx]
     clf = gbm.pipeline.named_steps["clf"]
     try:
         r = permutation_importance(
-            clf, Z, y_test, n_repeats=n_repeats,
+            clf, Z, y, n_repeats=n_repeats,
             random_state=RANDOM_STATE, scoring="average_precision", n_jobs=-1,
         )
         return pd.Series(r.importances_mean, index=gbm.encoded_names)
