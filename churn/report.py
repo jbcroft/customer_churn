@@ -17,35 +17,54 @@ from typing import Any
 
 import pandas as pd
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 3000
+DEFAULT_MODEL = "claude-opus-4-8"
+MAX_TOKENS = 8000
 
-SYSTEM_PROMPT = """You are a senior analyst writing a churn-analysis memo for a \
-private-equity operating-partner audience. Your reader cares about retention \
-economics: how churn drives Net/Gross Revenue Retention (NRR/GRR), LTV, and \
-ultimately the valuation multiple of a portfolio company.
+# Models that support adaptive thinking + the effort parameter (used to deepen
+# the analysis). Anything else falls back to a plain request.
+_THINKING_MODELS = ("claude-opus-4-", "claude-sonnet-4-6", "claude-fable-5")
 
-Write in clear, direct business prose. Structure the memo with these sections, \
-in this order, using markdown headings:
+SYSTEM_PROMPT = """You are a senior data analyst writing a churn-analysis report \
+for the business stakeholders who own the customer relationship (operations, \
+customer success, product). Write clearly and concretely for a smart \
+non-statistician. Lead with what the data shows and what to do about it.
 
-1. **Executive summary** — the base churn rate, the headline risk, and the \
-   retention-economics framing (NRR/GRR/LTV).
-2. **The churn problem** — who is leaving and how much. If you compare to a \
-   benchmark, you must label it explicitly as *illustrative* (no benchmark was \
-   supplied).
-3. **Key drivers** — ranked, each with a plain-language direction (raises/lowers \
-   churn) and the statistic backing it (odds ratio, SHAP, or significance).
-4. **Recommended interventions** — each tied to a specific driver, framed as a \
-   hypothesis to test, not a guaranteed fix.
-5. **Caveats** — correlation is not causation; data limitations; class \
-   imbalance; sample size.
+The report must answer three questions, in this order, using markdown headings:
+
+1. **Who churned** — which customer segments and profiles are leaving, and how \
+   much more than the overall base rate. Use the segment churn rates and the \
+   directional drivers to paint a concrete picture of the at-risk customer.
+2. **Why they churned** — the ranked key drivers of churn, each in plain language \
+   with its direction (raises/lowers churn) and the statistic that backs it \
+   (odds ratio, SHAP importance, or statistical significance). Where SHAP is \
+   provided, use it to explain *how* a driver moves churn.
+3. **How to catch and prevent it** — split into two parts:
+   a. *Identify earlier*: the leading indicators and early-warning signals an \
+      analyst could monitor to flag an at-risk customer **before** they leave, \
+      grounded in the drivers and the model's ability to rank risk (lift in the \
+      top deciles → a watchlist / risk-scoring approach).
+   b. *Prevent*: concrete interventions, each tied to a specific driver and \
+      framed as a hypothesis to test, not a guaranteed fix.
+
+Open with a short **Executive summary** (the base churn rate plus the 2-3 \
+headline takeaways) and close with **Caveats**.
+
+Structure:
+- **Executive summary**
+- **1. Who churned**
+- **2. Why they churned**
+- **3. Catching churn earlier & preventing it**
+- **Caveats** — correlation is not causation; data limitations; class imbalance; \
+  sample size.
 
 HARD RULES:
 - Use ONLY numbers that appear in the supplied findings payload. Do NOT invent \
-  statistics, benchmarks, or dollar figures.
+  statistics, benchmarks, dollar figures, or industry comparisons.
 - If you state an assumption, flag it explicitly as an assumption.
 - A "driver" means associated + predictive, NOT causal. Never imply an \
   intervention is guaranteed to work.
+- Do NOT frame this around private equity, valuation multiples, NRR/GRR, or \
+  investor economics. The audience is the operating team.
 """
 
 
@@ -105,19 +124,31 @@ def build_findings_payload(
         "segment_churn_rates": segment_rates or {},
         "notes": [
             "Drivers are associations, not proven causes.",
-            "No external benchmark was supplied; any benchmark in the memo is illustrative.",
+            "No external benchmark was supplied; do not compare to industry figures.",
+            "Risk-ranking deciles show how well the model concentrates churners into "
+            "the highest-risk customers — the basis for early identification.",
         ],
     }
 
 
 def metrics_for_payload(model_result) -> dict[str, Any]:
-    """Compact metric dict for one model (CV mean±std + test)."""
+    """Compact metric dict for one model (CV mean±std + test + risk ranking)."""
+    gains = model_result.gains
+    risk_deciles = []
+    if not gains.empty:
+        for _, r in gains.head(3).iterrows():
+            risk_deciles.append({
+                "decile": int(r["decile"]),
+                "churn_rate": round(float(r["churn_rate"]), 4),
+                "lift": round(float(r["lift"]), 3),
+                "cum_pct_churners_captured": round(float(r["cum_pct_churners_captured"]), 4),
+            })
     return {
         "name": model_result.name,
         "cv": {k: {"mean": round(v[0], 4), "std": round(v[1], 4)} for k, v in model_result.cv.items()},
         "test": {k: round(v, 4) for k, v in model_result.test.items() if v == v},
-        "top_decile_lift": round(float(model_result.gains["lift"].iloc[0]), 3)
-        if not model_result.gains.empty else None,
+        "top_decile_lift": round(float(gains["lift"].iloc[0]), 3) if not gains.empty else None,
+        "risk_ranking_top_deciles": risk_deciles,
     }
 
 
@@ -149,9 +180,14 @@ def generate_report(payload: dict[str, Any], config: ReportConfig | None = None)
 
     client = anthropic.Anthropic(api_key=config.api_key, max_retries=config.max_retries)
     user_msg = (
-        "Write the churn memo from this findings payload (JSON). Use only these "
+        "Write the churn report from this findings payload (JSON). Use only these "
         "numbers.\n\n```json\n" + json.dumps(payload, indent=2, default=str) + "\n```"
     )
+
+    # Deepen the analysis with adaptive thinking + high effort on capable models.
+    extra: dict[str, Any] = {}
+    if config.model.startswith(_THINKING_MODELS):
+        extra = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}
 
     last_err: Exception | None = None
     for attempt in range(config.max_retries):
@@ -161,6 +197,7 @@ def generate_report(payload: dict[str, Any], config: ReportConfig | None = None)
                 max_tokens=config.max_tokens,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
+                **extra,
             )
             return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         except Exception as exc:  # noqa: BLE001 - map SDK errors to a clean message
@@ -177,6 +214,34 @@ def generate_report(payload: dict[str, Any], config: ReportConfig | None = None)
 # ----------------------------------------------------------------------
 # Export
 # ----------------------------------------------------------------------
+def report_figure_subset(figures: dict[str, Any]) -> dict[str, Any]:
+    """The driver-explaining figures to embed in the report, in narrative order.
+
+    SHAP beeswarm + dependence plots explain *why* customers churn; the driver
+    importance bar ranks the drivers; segment/distribution plots show *who*.
+    Model-performance curves (ROC/PR/calibration) are left for the Visualize tab.
+    """
+    def _title(fig: Any, fallback: str) -> str:
+        try:
+            t = fig.layout.title.text
+            return t if t else fallback
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    keys: list[str] = []
+    for key in ("driver_importance", "shap_beeswarm"):
+        if key in figures:
+            keys.append(key)
+    keys += [k for k in figures if k.startswith("shap_dependence::")]
+    keys += [k for k in figures if k.startswith(("segment::", "distribution::"))]
+
+    ordered: dict[str, Any] = {}
+    for key in keys:
+        fig = figures[key]
+        ordered[_title(fig, key)] = fig
+    return ordered
+
+
 def export_markdown(md: str) -> bytes:
     return md.encode("utf-8")
 

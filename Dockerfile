@@ -26,6 +26,11 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
     && pip install "weasyprint>=63"   # enabled here because system libs are present
 
+# Fetch the headless Chrome that kaleido uses to render plotly figures to PNG,
+# so the SHAP/driver visuals embed in the exported PDF report. Best-effort: the
+# app degrades to interactive-HTML figures if this is unavailable.
+RUN kaleido_get_chrome || echo "kaleido chrome fetch skipped (PDF figures degrade to HTML)"
+
 # App source.
 COPY . .
 

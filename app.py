@@ -513,17 +513,28 @@ def stage_report(state: AppState):
 
     if state.report_markdown:
         st.markdown(state.report_markdown)
+
+        # Driver visuals embedded with the report (SHAP + drivers + segments).
+        report_figs = report.report_figure_subset(state.figures)
+        if report_figs:
+            st.divider()
+            st.subheader("📊 Key driver visuals")
+            st.caption("The SHAP charts explain *why* customers churn; the segment charts show *who*.")
+            for title, fig in report_figs.items():
+                st.markdown(f"**{title}**")
+                st.plotly_chart(fig, width="stretch", key=f"rep_{title}")
+
         st.divider()
         st.subheader("Export")
         c1, c2, c3 = st.columns(3)
         c1.download_button("⬇️ Markdown", report.export_markdown(state.report_markdown),
                            "churn_report.md", "text/markdown")
         c2.download_button("⬇️ HTML (+figures)",
-                           report.export_html(state.report_markdown, state.figures),
+                           report.export_html(state.report_markdown, report_figs),
                            "churn_report.html", "text/html")
-        pdf = report.export_pdf(state.report_markdown, state.figures)
+        pdf = report.export_pdf(state.report_markdown, report_figs)
         if pdf:
-            c3.download_button("⬇️ PDF", pdf, "churn_report.pdf", "application/pdf")
+            c3.download_button("⬇️ PDF (+figures)", pdf, "churn_report.pdf", "application/pdf")
         else:
             c3.caption("PDF needs weasyprint system libs — use HTML/Markdown.")
         docx = report.export_docx(state.report_markdown)
