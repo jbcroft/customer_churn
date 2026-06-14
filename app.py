@@ -529,14 +529,16 @@ def stage_report(state: AppState):
         c1, c2, c3 = st.columns(3)
         c1.download_button("⬇️ Markdown", report.export_markdown(state.report_markdown),
                            "churn_report.md", "text/markdown")
-        c2.download_button("⬇️ HTML (+figures)",
+        c2.download_button("⬇️ HTML (+charts)",
                            report.export_html(state.report_markdown, report_figs),
                            "churn_report.html", "text/html")
         pdf = report.export_pdf(state.report_markdown, report_figs)
         if pdf:
-            c3.download_button("⬇️ PDF (+figures)", pdf, "churn_report.pdf", "application/pdf")
+            c3.download_button("⬇️ PDF", pdf, "churn_report.pdf", "application/pdf")
         else:
             c3.caption("PDF needs weasyprint system libs — use HTML/Markdown.")
+        st.caption("The interactive SHAP/driver charts are embedded in the **HTML** export "
+                   "(and shown above). The PDF carries the full narrative and data tables.")
         docx = report.export_docx(state.report_markdown)
         if docx:
             st.download_button("⬇️ DOCX", docx, "churn_report.docx",

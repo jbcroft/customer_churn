@@ -72,7 +72,7 @@ in the sidebar records everything done to your data (audit trail + report input)
 | **Model** | Stratified split **and** k-fold CV (mean ± std); class-weights or in-fold SMOTE; **Logistic Regression** (→ odds ratios w/ CIs) + **gradient boosting**. Imbalance-aware metrics led by **PR-AUC**, plus calibration & lift. Tunable threshold. |
 | **Drivers** | One ranked, directional driver table unifying **odds ratios + permutation importance + SHAP**, reconciled to original fields and cross-checked against the univariate stats. |
 | **Visualize** | Churn-by-segment, distribution overlays, correlation heatmap, SHAP summary/dependence, ROC/PR, confusion, calibration, lift & cumulative-gains. |
-| **Report** | A compact **aggregated** findings payload → Claude → a PE-audience memo (exec summary, the churn problem, key drivers, interventions-as-hypotheses, caveats). Export to Markdown / HTML / PDF / DOCX. |
+| **Report** | A compact **aggregated** findings payload → Claude (`claude-opus-4-8` by default, adaptive thinking) → an operations-audience report answering **who churned, why, and how to identify it earlier & prevent it**, with the SHAP/driver charts embedded. Export to Markdown / HTML (interactive charts) / PDF / DOCX. |
 
 ---
 
@@ -144,7 +144,7 @@ call is mocked in tests; only a manual run hits the real API.
 | Variable | Purpose | Default |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Auth for the report stage (only) | — (report disabled if unset) |
-| `REPORT_MODEL` | Model that writes the memo | `claude-sonnet-4-6` |
+| `REPORT_MODEL` | Model that writes the report | `claude-opus-4-8` (set to `claude-sonnet-4-6` for a faster/cheaper report) |
 
 Secrets live in `.env` (git-ignored); `.env.example` is committed. No secrets in code.
 
