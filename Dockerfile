@@ -11,11 +11,19 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# System libraries: OpenMP for XGBoost + Pango/Cairo stack for weasyprint PDFs.
+# System libraries:
+#  - libgomp1                      -> XGBoost (OpenMP)
+#  - pango/cairo/gdk-pixbuf/...    -> weasyprint PDF rendering
+#  - libnss3/libatk/libxkbcommon/… -> headless Chrome that kaleido uses to render
+#                                     plotly figures to PNG for the PDF report
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         libpango-1.0-0 libpangocairo-1.0-0 libcairo2 \
         libgdk-pixbuf-2.0-0 libffi8 shared-mime-info fonts-dejavu-core \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libasound2 libxshmfence1 libatspi2.0-0 libx11-6 libxcb1 \
+        libxext6 libxi6 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
