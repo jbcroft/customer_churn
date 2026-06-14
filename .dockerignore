@@ -1,0 +1,15 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+.env
+*.md
+!README.md
+sample_data/churn_synthetic.csv

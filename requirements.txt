@@ -1,0 +1,35 @@
+# Core app
+streamlit>=1.40
+pandas>=2.2
+numpy>=1.26
+
+# Stats
+scipy>=1.13
+statsmodels>=0.14
+
+# ML
+scikit-learn>=1.5
+xgboost>=2.1            # falls back to sklearn HistGradientBoostingClassifier if import fails
+imbalanced-learn>=0.12
+
+# Explainability
+shap>=0.46
+
+# Viz
+plotly>=5.24
+
+# Survival (stretch)
+lifelines>=0.29
+
+# Report -> AI + files
+anthropic>=0.40
+python-docx>=1.1        # optional DOCX export
+python-dotenv>=1.0
+markdown>=3.7
+
+# Optional PDF export. Requires system libs (cairo/pango). If install fails the app
+# degrades to markdown/HTML export automatically:
+#   weasyprint>=63
+
+# Testing
+pytest>=8.3
