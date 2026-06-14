@@ -1,0 +1,20 @@
+# One-command local run:  docker compose up --build
+# Then open http://localhost:8501
+#
+# Docker Compose auto-loads a sibling .env file for variable substitution, so if
+# you create .env (see .env.example) your ANTHROPIC_API_KEY is passed through to
+# the container for the AI report stage. Without it, every other stage still works.
+services:
+  churn-app:
+    build: .
+    image: churn-analysis:latest
+    container_name: churn-analysis
+    ports:
+      - "8501:8501"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - REPORT_MODEL=${REPORT_MODEL:-claude-sonnet-4-6}
+    # Mount a local folder to share your own datasets into the container (optional).
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
